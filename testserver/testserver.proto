@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+service Sample {
+    rpc Simple(SimpleRequest) returns (SimpleResponse) {}
+}
+
+message SimpleRequest {
+    string attr1 = 1;
+}
+
+message SimpleResponse {
+    string attr1 = 1;
+}
+

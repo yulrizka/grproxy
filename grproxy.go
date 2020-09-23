@@ -22,8 +22,7 @@ import (
 
 type Proxy struct {
 	targetAddr string
-
-	grpc *grpc.Server
+	grpc       *grpc.Server
 
 	client     *grpc.ClientConn
 	reflClient *grpcreflect.Client
@@ -34,13 +33,16 @@ func NewInterceptor(targetAddr string) *Proxy {
 		targetAddr: targetAddr,
 	}
 	i.grpc = grpc.NewServer(
-		grpc.UnaryInterceptor(i.UnaryServerInterceptor()),
-		grpc.StreamInterceptor(i.StreamServerInterceptor()),
+		grpc.UnaryInterceptor(i.unaryServerInterceptor()),
+		grpc.StreamInterceptor(i.streamServerInterceptor()),
 	)
 
 	return &i
 }
 
+// Serve proxy request. This will start a grpc server and start collecting upstream services and method
+// and create a stub method that will intercept the message, send it to upstream, and forward the reply to
+// the client
 func (p *Proxy) Serve(ctx context.Context, l net.Listener) error {
 	errw := func(format string, a ...interface{}) error {
 		return fmt.Errorf("grproxy: %w", a...)
@@ -110,14 +112,15 @@ func (p *Proxy) Serve(ctx context.Context, l net.Listener) error {
 				grpcSD.Methods = append(grpcSD.Methods, methodDesc)
 			}
 		}
-
 		p.grpc.RegisterService(&grpcSD, nil)
 	}
 
 	return p.grpc.Serve(l)
 }
 
-func (p *Proxy) UnaryServerInterceptor() func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+// unaryServerInterceptor intercepts unary request from the client, reflect the method, send it to the upstream server
+// and forward the response back to the client
+func (p *Proxy) unaryServerInterceptor() func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, _ grpc.UnaryHandler) (interface{}, error) {
 		raw, err := json.MarshalIndent(req, "", "  ")
 		if err != nil {
@@ -127,35 +130,10 @@ func (p *Proxy) UnaryServerInterceptor() func(ctx context.Context, req interface
 		fmt.Printf("%s\n%s\n", info.FullMethod, raw)
 
 		// proxy call
-		client, reflClient, err := p.getClient(ctx)
+		mtd, stub, _, err := p.reflectMethod(ctx, info.FullMethod)
 		if err != nil {
 			return nil, err
 		}
-
-		// resolve method by name
-		svc, mth := parseSymbol(info.FullMethod)
-		fullMethodName := svc + "." + mth
-		file, err := reflClient.FileContainingSymbol(fullMethodName)
-		if err != nil {
-			return nil, fmt.Errorf("grproxy: get descriptor: %w", err)
-		}
-		dsc := file.FindSymbol(svc)
-		sd, ok := dsc.(*desc.ServiceDescriptor)
-		if !ok {
-			return nil, fmt.Errorf("grproxy: target server does not expose service %q", svc)
-		}
-		mtd := sd.FindMethodByName(mth)
-		if mtd == nil {
-			return nil, fmt.Errorf("service %q does not include a method named %q", svc, mth)
-		}
-
-		// make stub
-		msgFactory := dynamic.NewMessageFactoryWithDefaults()
-		//req := msgFactory.NewMessage(mtd.GetInputType())
-		md := make(metadata.MD)
-		ctx = metadata.NewOutgoingContext(ctx, md)
-		stub := grpcdynamic.NewStubWithMessageFactory(client, msgFactory)
-
 		msg, ok := req.(proto.Message)
 		if !ok {
 			return nil, fmt.Errorf("grproxy: req is not an instance of 'proto.Message'")
@@ -165,6 +143,7 @@ func (p *Proxy) UnaryServerInterceptor() func(ctx context.Context, req interface
 			return nil, err
 		}
 
+		// read response
 		raw, err = json.MarshalIndent(resp, "", "  ")
 		if err != nil {
 			fmt.Printf("\nresponse:\n%v\n", err)
@@ -175,40 +154,19 @@ func (p *Proxy) UnaryServerInterceptor() func(ctx context.Context, req interface
 		return resp, nil
 	}
 }
-func (p *Proxy) StreamServerInterceptor() func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+
+// streamServerInterceptor intercepts stream request from the client, reflect the method and send the message stream back
+// to the client
+func (p *Proxy) streamServerInterceptor() func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, _ grpc.StreamHandler) error {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
 		// proxy call
-		client, reflClient, err := p.getClient(context.Background())
+		mtd, stub, msgFactory, err := p.reflectMethod(ctx, info.FullMethod)
 		if err != nil {
-			return fmt.Errorf("grproxy: %w", err)
+			return err
 		}
-
-		// resolve method by name
-		svc, mth := parseSymbol(info.FullMethod)
-		fullMethodName := svc + "." + mth
-		file, err := reflClient.FileContainingSymbol(fullMethodName)
-		if err != nil {
-			return fmt.Errorf("grproxy: get descriptor: %w", err)
-		}
-		dsc := file.FindSymbol(svc)
-		sd, ok := dsc.(*desc.ServiceDescriptor)
-		if !ok {
-			return fmt.Errorf("grproxy: target server does not expose service %q", svc)
-		}
-		mtd := sd.FindMethodByName(mth)
-		if mtd == nil {
-			return fmt.Errorf("service %q does not include a method named %q", svc, mth)
-		}
-
-		// make stub
-		msgFactory := dynamic.NewMessageFactoryWithDefaults()
-		//req := msgFactory.NewMessage(mtd.GetInputType())
-		md := make(metadata.MD)
-		ctx = metadata.NewOutgoingContext(ctx, md)
-		stub := grpcdynamic.NewStubWithMessageFactory(client, msgFactory)
 
 		// assume bidirectional streaming
 		upstream, err := stub.InvokeRpcBidiStream(ctx, mtd)
@@ -264,6 +222,40 @@ func (p *Proxy) StreamServerInterceptor() func(srv interface{}, ss grpc.ServerSt
 
 		return eg.Wait()
 	}
+}
+
+// reflectMethod from info to provide method-descriptor, stub server implementation and a messageFactory
+func (p *Proxy) reflectMethod(ctx context.Context, fullMethodName string) (*desc.MethodDescriptor, grpcdynamic.Stub, *dynamic.MessageFactory, error) {
+	// proxy call
+	client, reflClient, err := p.getClient(ctx)
+	if err != nil {
+		return nil, grpcdynamic.Stub{}, nil, err
+	}
+
+	// resolve method by name
+	svc, mth := parseSymbol(fullMethodName)
+	fullMethodName = svc + "." + mth
+	file, err := reflClient.FileContainingSymbol(fullMethodName)
+	if err != nil {
+		return nil, grpcdynamic.Stub{}, nil, fmt.Errorf("grproxy: get descriptor: %w", err)
+	}
+	dsc := file.FindSymbol(svc)
+	sd, ok := dsc.(*desc.ServiceDescriptor)
+	if !ok {
+		return nil, grpcdynamic.Stub{}, nil, fmt.Errorf("grproxy: target server does not expose service %q", svc)
+	}
+	mtd := sd.FindMethodByName(mth)
+	if mtd == nil {
+		return nil, grpcdynamic.Stub{}, nil, fmt.Errorf("service %q does not include a method named %q", svc, mth)
+	}
+
+	// make stub
+	msgFactory := dynamic.NewMessageFactoryWithDefaults()
+	md := make(metadata.MD)
+	ctx = metadata.NewOutgoingContext(ctx, md)
+	stub := grpcdynamic.NewStubWithMessageFactory(client, msgFactory)
+
+	return mtd, stub, msgFactory, nil
 }
 
 func (p *Proxy) getClient(ctx context.Context) (*grpc.ClientConn, *grpcreflect.Client, error) {

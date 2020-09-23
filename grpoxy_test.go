@@ -60,7 +60,6 @@ func TestCall(t *testing.T) {
 	})
 
 	t.Run("stream", func(t *testing.T) {
-		// test calling stream function
 		stream, err := client.Streaming(ctx)
 		if err != nil {
 			t.Fatal(err)
@@ -81,6 +80,31 @@ func TestCall(t *testing.T) {
 		}
 		if err := stream.CloseSend(); err != nil {
 			t.Fatal(err)
+		}
+	})
+
+	t.Run("client stream", func(t *testing.T) {
+		stream, err := client.ClientStream(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < 2; i++ {
+			req := testserver.SimpleRequest{Attr1: fmt.Sprintf("attr1 %d", i)}
+			err := stream.Send(&req)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := stream.CloseSend(); err != nil {
+			t.Fatal(err)
+		}
+		var resp testserver.SimpleResponse
+		if err = stream.RecvMsg(&resp); err != nil {
+			t.Fatal(err)
+		}
+		got, want := resp.Attr1, "0 received: attr1 0;1 received: attr1 1;"
+		if got != want {
+			t.Fatalf("got %v want %v", got, want)
 		}
 	})
 }

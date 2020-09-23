@@ -2,7 +2,9 @@ package testserver
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"strings"
 )
 
 type sampleHandler struct{}
@@ -10,8 +12,9 @@ type sampleHandler struct{}
 func NewHandler() *SampleService {
 	var h sampleHandler
 	return &SampleService{
-		Simple:    h.Simple,
-		Streaming: h.Streaming,
+		Simple:       h.Simple,
+		Streaming:    h.Streaming,
+		ClientStream: h.ClientStream,
 	}
 }
 
@@ -34,4 +37,22 @@ func (s sampleHandler) Streaming(stream Sample_StreamingServer) error {
 			return err
 		}
 	}
+}
+
+func (s sampleHandler) ClientStream(ss Sample_ClientStreamServer) error {
+	var out strings.Builder
+	i := 0
+	for {
+		msg, err := ss.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("recv: %w", err)
+		}
+		out.WriteString(fmt.Sprintf("%d received: %s;", i, msg.Attr1))
+		i++
+	}
+
+	return ss.SendAndClose(&SimpleResponse{Attr1: out.String()})
 }

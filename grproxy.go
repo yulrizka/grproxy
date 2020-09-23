@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"strings"
@@ -14,7 +13,6 @@ import (
 	"github.com/jhump/protoreflect/dynamic"
 	"github.com/jhump/protoreflect/dynamic/grpcdynamic"
 	"github.com/jhump/protoreflect/grpcreflect"
-	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 	reflectpb "google.golang.org/grpc/reflection/grpc_reflection_v1alpha"
@@ -59,6 +57,7 @@ func (p *Proxy) Serve(ctx context.Context, l net.Listener) error {
 		return fmt.Errorf("list services: %w", err)
 	}
 
+	// stub all services
 	for _, svc := range services {
 		file, err := reflClient.FileContainingSymbol(svc)
 		if err != nil {
@@ -77,6 +76,7 @@ func (p *Proxy) Serve(ctx context.Context, l net.Listener) error {
 			Metadata:    sd.GetFile().GetName(),
 		}
 
+		// stub all methods
 		for _, md := range sd.GetMethods() {
 			md := md
 			if md.IsClientStreaming() || md.IsServerStreaming() {
@@ -168,59 +168,15 @@ func (p *Proxy) streamServerInterceptor() func(srv interface{}, ss grpc.ServerSt
 			return err
 		}
 
-		// assume bidirectional streaming
-		upstream, err := stub.InvokeRpcBidiStream(ctx, mtd)
-		if err != nil {
-			return err
+		switch {
+		case info.IsClientStream && info.IsServerStream:
+			return handleBidiStream(ctx, ss, stub, mtd, msgFactory)
+		case info.IsClientStream:
+			return handleClientStream(ctx, ss, stub, mtd, msgFactory)
+		case info.IsServerStream:
 		}
 
-		eg, ctx := errgroup.WithContext(ctx)
-		// receive message from client send to upstream
-		eg.Go(func() error {
-			defer func() {
-				if err := upstream.CloseSend(); err != nil {
-					log.Printf("failed to close send upstream")
-				}
-			}()
-
-			for {
-				m := msgFactory.NewMessage(mtd.GetInputType())
-
-				// receive from client
-				err := ss.RecvMsg(m)
-				if err == io.EOF {
-					return nil
-				}
-				if err != nil {
-					return fmt.Errorf("receive message from client: %w", err)
-				}
-
-				// send to upstream
-				if err = upstream.SendMsg(m); err != nil {
-					return fmt.Errorf("send message to upstream: %w", err)
-				}
-			}
-		})
-
-		eg.Go(func() error {
-			for {
-				// receive from upstream
-				msg, err := upstream.RecvMsg()
-				if err == io.EOF {
-					return nil
-				}
-				if err != nil {
-					return fmt.Errorf("receive message from upstream: %w", err)
-				}
-
-				// send to client
-				if err = ss.SendMsg(msg); err != nil {
-					return fmt.Errorf("send message to client: %w", err)
-				}
-			}
-		})
-
-		return eg.Wait()
+		return nil
 	}
 }
 

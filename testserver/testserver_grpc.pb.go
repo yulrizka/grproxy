@@ -19,6 +19,7 @@ const _ = grpc.SupportPackageIsVersion7
 type SampleClient interface {
 	Simple(ctx context.Context, in *SimpleRequest, opts ...grpc.CallOption) (*SimpleResponse, error)
 	Streaming(ctx context.Context, opts ...grpc.CallOption) (Sample_StreamingClient, error)
+	ClientStream(ctx context.Context, opts ...grpc.CallOption) (Sample_ClientStreamClient, error)
 }
 
 type sampleClient struct {
@@ -79,13 +80,53 @@ func (x *sampleStreamingClient) Recv() (*SimpleResponse, error) {
 	return m, nil
 }
 
+var sampleClientStreamStreamDesc = &grpc.StreamDesc{
+	StreamName:    "ClientStream",
+	ClientStreams: true,
+}
+
+func (c *sampleClient) ClientStream(ctx context.Context, opts ...grpc.CallOption) (Sample_ClientStreamClient, error) {
+	stream, err := c.cc.NewStream(ctx, sampleClientStreamStreamDesc, "/Sample/ClientStream", opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &sampleClientStreamClient{stream}
+	return x, nil
+}
+
+type Sample_ClientStreamClient interface {
+	Send(*SimpleRequest) error
+	CloseAndRecv() (*SimpleResponse, error)
+	grpc.ClientStream
+}
+
+type sampleClientStreamClient struct {
+	grpc.ClientStream
+}
+
+func (x *sampleClientStreamClient) Send(m *SimpleRequest) error {
+	return x.ClientStream.SendMsg(m)
+}
+
+func (x *sampleClientStreamClient) CloseAndRecv() (*SimpleResponse, error) {
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	m := new(SimpleResponse)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 // SampleService is the service API for Sample service.
 // Fields should be assigned to their respective handler implementations only before
 // RegisterSampleService is called.  Any unassigned fields will result in the
 // handler for that method returning an Unimplemented error.
 type SampleService struct {
-	Simple    func(context.Context, *SimpleRequest) (*SimpleResponse, error)
-	Streaming func(Sample_StreamingServer) error
+	Simple       func(context.Context, *SimpleRequest) (*SimpleResponse, error)
+	Streaming    func(Sample_StreamingServer) error
+	ClientStream func(Sample_ClientStreamServer) error
 }
 
 func (s *SampleService) simple(_ interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -107,6 +148,9 @@ func (s *SampleService) simple(_ interface{}, ctx context.Context, dec func(inte
 }
 func (s *SampleService) streaming(_ interface{}, stream grpc.ServerStream) error {
 	return s.Streaming(&sampleStreamingServer{stream})
+}
+func (s *SampleService) clientStream(_ interface{}, stream grpc.ServerStream) error {
+	return s.ClientStream(&sampleClientStreamServer{stream})
 }
 
 type Sample_StreamingServer interface {
@@ -131,6 +175,28 @@ func (x *sampleStreamingServer) Recv() (*SimpleRequest, error) {
 	return m, nil
 }
 
+type Sample_ClientStreamServer interface {
+	SendAndClose(*SimpleResponse) error
+	Recv() (*SimpleRequest, error)
+	grpc.ServerStream
+}
+
+type sampleClientStreamServer struct {
+	grpc.ServerStream
+}
+
+func (x *sampleClientStreamServer) SendAndClose(m *SimpleResponse) error {
+	return x.ServerStream.SendMsg(m)
+}
+
+func (x *sampleClientStreamServer) Recv() (*SimpleRequest, error) {
+	m := new(SimpleRequest)
+	if err := x.ServerStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 // RegisterSampleService registers a service implementation with a gRPC server.
 func RegisterSampleService(s grpc.ServiceRegistrar, srv *SampleService) {
 	srvCopy := *srv
@@ -142,6 +208,11 @@ func RegisterSampleService(s grpc.ServiceRegistrar, srv *SampleService) {
 	if srvCopy.Streaming == nil {
 		srvCopy.Streaming = func(Sample_StreamingServer) error {
 			return status.Errorf(codes.Unimplemented, "method Streaming not implemented")
+		}
+	}
+	if srvCopy.ClientStream == nil {
+		srvCopy.ClientStream = func(Sample_ClientStreamServer) error {
+			return status.Errorf(codes.Unimplemented, "method ClientStream not implemented")
 		}
 	}
 	sd := grpc.ServiceDesc{
@@ -157,6 +228,11 @@ func RegisterSampleService(s grpc.ServiceRegistrar, srv *SampleService) {
 				StreamName:    "Streaming",
 				Handler:       srvCopy.streaming,
 				ServerStreams: true,
+				ClientStreams: true,
+			},
+			{
+				StreamName:    "ClientStream",
+				Handler:       srvCopy.clientStream,
 				ClientStreams: true,
 			},
 		},

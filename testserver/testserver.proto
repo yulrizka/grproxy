@@ -2,6 +2,7 @@ syntax = "proto3";
 
 service Sample {
     rpc Simple(SimpleRequest) returns (SimpleResponse) {}
+    rpc Streaming(stream SimpleRequest) returns (stream SimpleResponse) {}
 }
 
 message SimpleRequest {

@@ -38,24 +38,51 @@ func TestSimpleCall(t *testing.T) {
 		}
 	}()
 
-	// test calling function
+	// test calling unary function
 	addr := l.Addr().String()
+	//addr = target.listener.Addr().String()
 	conn, err := grpc.Dial(addr, grpc.WithInsecure(), grpc.WithBlock())
 	if err != nil {
 		t.Fatal(err)
 	}
 	client := testserver.NewSampleClient(conn)
 
-	req := testserver.SimpleRequest{Attr1: "attr1"}
-	resp, err := client.Simple(ctx, &req)
-	if err != nil {
-		t.Fatalf("simple: %v", err)
-	}
+	t.Run("unary", func(t *testing.T) {
+		req := testserver.SimpleRequest{Attr1: "attr1"}
+		resp, err := client.Simple(ctx, &req)
+		if err != nil {
+			t.Fatalf("simple: %v", err)
+		}
 
-	if got, want := resp.Attr1, "response "+req.Attr1; got != want {
-		t.Fatalf("attr1 got %q want %q", got, want)
-	}
+		if got, want := resp.Attr1, "response "+req.Attr1; got != want {
+			t.Fatalf("attr1 got %q want %q", got, want)
+		}
+	})
 
+	t.Run("stream", func(t *testing.T) {
+		// test calling stream function
+		stream, err := client.Streaming(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < 2; i++ {
+			req := testserver.SimpleRequest{Attr1: fmt.Sprintf("attr1 %d", i)}
+			err := stream.Send(&req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := stream.Recv()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := resp.Attr1, "response "+req.Attr1; got != want {
+				t.Errorf("got %q want %q", got, want)
+			}
+		}
+		if err := stream.CloseSend(); err != nil {
+			t.Fatal(err)
+		}
+	})
 }
 
 type server struct {

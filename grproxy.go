@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"net"
 	"strings"
 
@@ -12,10 +14,10 @@ import (
 	"github.com/jhump/protoreflect/dynamic"
 	"github.com/jhump/protoreflect/dynamic/grpcdynamic"
 	"github.com/jhump/protoreflect/grpcreflect"
+	"golang.org/x/sync/errgroup"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 	reflectpb "google.golang.org/grpc/reflection/grpc_reflection_v1alpha"
-
-	"google.golang.org/grpc"
 )
 
 type Proxy struct {
@@ -33,6 +35,7 @@ func NewInterceptor(targetAddr string) *Proxy {
 	}
 	i.grpc = grpc.NewServer(
 		grpc.UnaryInterceptor(i.UnaryServerInterceptor()),
+		grpc.StreamInterceptor(i.StreamServerInterceptor()),
 	)
 
 	return &i
@@ -66,28 +69,46 @@ func (p *Proxy) Serve(ctx context.Context, l net.Listener) error {
 		}
 
 		grpcSD := grpc.ServiceDesc{
-			ServiceName: sd.GetName(),
+			ServiceName: sd.GetFullyQualifiedName(),
 			Methods:     []grpc.MethodDesc{},
 			Streams:     []grpc.StreamDesc{},
 			Metadata:    sd.GetFile().GetName(),
 		}
 
 		for _, md := range sd.GetMethods() {
-			grpcSD.Methods = append(grpcSD.Methods, grpc.MethodDesc{
-				MethodName: md.GetName(),
-				Handler: func(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-					msgFactory := dynamic.NewMessageFactoryWithDefaults()
-					in := msgFactory.NewDynamicMessage(md.GetInputType())
-					if err := dec(in); err != nil {
-						return nil, err
-					}
-					info := &grpc.UnaryServerInfo{
-						Server:     nil,
-						FullMethod: md.GetFullyQualifiedName(),
-					}
-					return interceptor(ctx, in, info, nil)
-				},
-			})
+			md := md
+			if md.IsClientStreaming() || md.IsServerStreaming() {
+				log.Printf("stubbing: %s (streaming)", md.GetFullyQualifiedName())
+				// handle streaming
+				streamDesc := grpc.StreamDesc{
+					StreamName: md.GetName(),
+					Handler: func(srv interface{}, stream grpc.ServerStream) error {
+						return nil
+					},
+					ServerStreams: md.IsServerStreaming(),
+					ClientStreams: md.IsClientStreaming(),
+				}
+				grpcSD.Streams = append(grpcSD.Streams, streamDesc)
+			} else {
+				// handle unary method
+				log.Printf("stubbing: %s (unary)", md.GetFullyQualifiedName())
+				methodDesc := grpc.MethodDesc{
+					MethodName: md.GetName(),
+					Handler: func(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+						msgFactory := dynamic.NewMessageFactoryWithDefaults()
+						in := msgFactory.NewDynamicMessage(md.GetInputType())
+						if err := dec(in); err != nil {
+							return nil, err
+						}
+						info := &grpc.UnaryServerInfo{
+							Server:     nil,
+							FullMethod: md.GetFullyQualifiedName(),
+						}
+						return interceptor(ctx, in, info, nil)
+					},
+				}
+				grpcSD.Methods = append(grpcSD.Methods, methodDesc)
+			}
 		}
 
 		p.grpc.RegisterService(&grpcSD, nil)
@@ -97,7 +118,7 @@ func (p *Proxy) Serve(ctx context.Context, l net.Listener) error {
 }
 
 func (p *Proxy) UnaryServerInterceptor() func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, _ grpc.UnaryHandler) (interface{}, error) {
 		raw, err := json.MarshalIndent(req, "", "  ")
 		if err != nil {
 			fmt.Printf("%s\n%v\n", info.FullMethod, err)
@@ -155,8 +176,93 @@ func (p *Proxy) UnaryServerInterceptor() func(ctx context.Context, req interface
 	}
 }
 func (p *Proxy) StreamServerInterceptor() func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-		return nil
+	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, _ grpc.StreamHandler) error {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		// proxy call
+		client, reflClient, err := p.getClient(context.Background())
+		if err != nil {
+			return fmt.Errorf("grproxy: %w", err)
+		}
+
+		// resolve method by name
+		svc, mth := parseSymbol(info.FullMethod)
+		fullMethodName := svc + "." + mth
+		file, err := reflClient.FileContainingSymbol(fullMethodName)
+		if err != nil {
+			return fmt.Errorf("grproxy: get descriptor: %w", err)
+		}
+		dsc := file.FindSymbol(svc)
+		sd, ok := dsc.(*desc.ServiceDescriptor)
+		if !ok {
+			return fmt.Errorf("grproxy: target server does not expose service %q", svc)
+		}
+		mtd := sd.FindMethodByName(mth)
+		if mtd == nil {
+			return fmt.Errorf("service %q does not include a method named %q", svc, mth)
+		}
+
+		// make stub
+		msgFactory := dynamic.NewMessageFactoryWithDefaults()
+		//req := msgFactory.NewMessage(mtd.GetInputType())
+		md := make(metadata.MD)
+		ctx = metadata.NewOutgoingContext(ctx, md)
+		stub := grpcdynamic.NewStubWithMessageFactory(client, msgFactory)
+
+		// assume bidirectional streaming
+		upstream, err := stub.InvokeRpcBidiStream(ctx, mtd)
+		if err != nil {
+			return err
+		}
+
+		eg, ctx := errgroup.WithContext(ctx)
+		// receive message from client send to upstream
+		eg.Go(func() error {
+			defer func() {
+				if err := upstream.CloseSend(); err != nil {
+					log.Printf("failed to close send upstream")
+				}
+			}()
+
+			for {
+				m := msgFactory.NewMessage(mtd.GetInputType())
+
+				// receive from client
+				err := ss.RecvMsg(m)
+				if err == io.EOF {
+					return nil
+				}
+				if err != nil {
+					return fmt.Errorf("receive message from client: %w", err)
+				}
+
+				// send to upstream
+				if err = upstream.SendMsg(m); err != nil {
+					return fmt.Errorf("send message to upstream: %w", err)
+				}
+			}
+		})
+
+		eg.Go(func() error {
+			for {
+				// receive from upstream
+				msg, err := upstream.RecvMsg()
+				if err == io.EOF {
+					return nil
+				}
+				if err != nil {
+					return fmt.Errorf("receive message from upstream: %w", err)
+				}
+
+				// send to client
+				if err = ss.SendMsg(msg); err != nil {
+					return fmt.Errorf("send message to client: %w", err)
+				}
+			}
+		})
+
+		return eg.Wait()
 	}
 }
 

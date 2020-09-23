@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -106,6 +107,32 @@ func TestCall(t *testing.T) {
 		if got != want {
 			t.Fatalf("got %v want %v", got, want)
 		}
+	})
+
+	t.Run("server stream", func(t *testing.T) {
+		stream, err := client.ServerStream(ctx, &testserver.SimpleRequest{Attr1: fmt.Sprintf("attr1")})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// receive multiple message
+		var s strings.Builder
+		for i := 0; i < 2; i++ {
+			resp, err := stream.Recv()
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.WriteString(resp.Attr1)
+			s.WriteString(";")
+		}
+		if got, want := s.String(), "received attr1 0;received attr1 1;"; got != want {
+			t.Fatalf("got %s want %s", got, want)
+		}
+
+		if err := stream.CloseSend(); err != nil {
+			t.Fatal(err)
+		}
+
 	})
 }
 

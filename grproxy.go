@@ -174,6 +174,7 @@ func (p *Proxy) streamServerInterceptor() func(srv interface{}, ss grpc.ServerSt
 		case info.IsClientStream:
 			return handleClientStream(ctx, ss, stub, mtd, msgFactory)
 		case info.IsServerStream:
+			return handleServerStream(ctx, ss, stub, mtd, msgFactory)
 		}
 
 		return nil

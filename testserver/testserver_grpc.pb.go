@@ -20,6 +20,7 @@ type SampleClient interface {
 	Simple(ctx context.Context, in *SimpleRequest, opts ...grpc.CallOption) (*SimpleResponse, error)
 	Streaming(ctx context.Context, opts ...grpc.CallOption) (Sample_StreamingClient, error)
 	ClientStream(ctx context.Context, opts ...grpc.CallOption) (Sample_ClientStreamClient, error)
+	ServerStream(ctx context.Context, in *SimpleRequest, opts ...grpc.CallOption) (Sample_ServerStreamClient, error)
 }
 
 type sampleClient struct {
@@ -119,6 +120,43 @@ func (x *sampleClientStreamClient) CloseAndRecv() (*SimpleResponse, error) {
 	return m, nil
 }
 
+var sampleServerStreamStreamDesc = &grpc.StreamDesc{
+	StreamName:    "ServerStream",
+	ServerStreams: true,
+}
+
+func (c *sampleClient) ServerStream(ctx context.Context, in *SimpleRequest, opts ...grpc.CallOption) (Sample_ServerStreamClient, error) {
+	stream, err := c.cc.NewStream(ctx, sampleServerStreamStreamDesc, "/Sample/ServerStream", opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &sampleServerStreamClient{stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type Sample_ServerStreamClient interface {
+	Recv() (*SimpleResponse, error)
+	grpc.ClientStream
+}
+
+type sampleServerStreamClient struct {
+	grpc.ClientStream
+}
+
+func (x *sampleServerStreamClient) Recv() (*SimpleResponse, error) {
+	m := new(SimpleResponse)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 // SampleService is the service API for Sample service.
 // Fields should be assigned to their respective handler implementations only before
 // RegisterSampleService is called.  Any unassigned fields will result in the
@@ -127,6 +165,7 @@ type SampleService struct {
 	Simple       func(context.Context, *SimpleRequest) (*SimpleResponse, error)
 	Streaming    func(Sample_StreamingServer) error
 	ClientStream func(Sample_ClientStreamServer) error
+	ServerStream func(*SimpleRequest, Sample_ServerStreamServer) error
 }
 
 func (s *SampleService) simple(_ interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -151,6 +190,13 @@ func (s *SampleService) streaming(_ interface{}, stream grpc.ServerStream) error
 }
 func (s *SampleService) clientStream(_ interface{}, stream grpc.ServerStream) error {
 	return s.ClientStream(&sampleClientStreamServer{stream})
+}
+func (s *SampleService) serverStream(_ interface{}, stream grpc.ServerStream) error {
+	m := new(SimpleRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return s.ServerStream(m, &sampleServerStreamServer{stream})
 }
 
 type Sample_StreamingServer interface {
@@ -197,6 +243,19 @@ func (x *sampleClientStreamServer) Recv() (*SimpleRequest, error) {
 	return m, nil
 }
 
+type Sample_ServerStreamServer interface {
+	Send(*SimpleResponse) error
+	grpc.ServerStream
+}
+
+type sampleServerStreamServer struct {
+	grpc.ServerStream
+}
+
+func (x *sampleServerStreamServer) Send(m *SimpleResponse) error {
+	return x.ServerStream.SendMsg(m)
+}
+
 // RegisterSampleService registers a service implementation with a gRPC server.
 func RegisterSampleService(s grpc.ServiceRegistrar, srv *SampleService) {
 	srvCopy := *srv
@@ -213,6 +272,11 @@ func RegisterSampleService(s grpc.ServiceRegistrar, srv *SampleService) {
 	if srvCopy.ClientStream == nil {
 		srvCopy.ClientStream = func(Sample_ClientStreamServer) error {
 			return status.Errorf(codes.Unimplemented, "method ClientStream not implemented")
+		}
+	}
+	if srvCopy.ServerStream == nil {
+		srvCopy.ServerStream = func(*SimpleRequest, Sample_ServerStreamServer) error {
+			return status.Errorf(codes.Unimplemented, "method ServerStream not implemented")
 		}
 	}
 	sd := grpc.ServiceDesc{
@@ -234,6 +298,11 @@ func RegisterSampleService(s grpc.ServiceRegistrar, srv *SampleService) {
 				StreamName:    "ClientStream",
 				Handler:       srvCopy.clientStream,
 				ClientStreams: true,
+			},
+			{
+				StreamName:    "ServerStream",
+				Handler:       srvCopy.serverStream,
+				ServerStreams: true,
 			},
 		},
 		Metadata: "testserver.proto",

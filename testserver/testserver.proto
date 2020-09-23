@@ -4,6 +4,7 @@ service Sample {
     rpc Simple(SimpleRequest) returns (SimpleResponse) {}
     rpc Streaming(stream SimpleRequest) returns (stream SimpleResponse) {}
     rpc ClientStream(stream SimpleRequest) returns (SimpleResponse) {}
+    rpc ServerStream(SimpleRequest) returns (stream SimpleResponse) {}
 }
 
 message SimpleRequest {

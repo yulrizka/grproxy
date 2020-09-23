@@ -15,6 +15,7 @@ func NewHandler() *SampleService {
 		Simple:       h.Simple,
 		Streaming:    h.Streaming,
 		ClientStream: h.ClientStream,
+		ServerStream: h.ServerStream,
 	}
 }
 
@@ -55,4 +56,15 @@ func (s sampleHandler) ClientStream(ss Sample_ClientStreamServer) error {
 	}
 
 	return ss.SendAndClose(&SimpleResponse{Attr1: out.String()})
+}
+
+func (s sampleHandler) ServerStream(req *SimpleRequest, ss Sample_ServerStreamServer) error {
+	for i := 0; i < 2; i++ {
+		resp := SimpleResponse{Attr1: fmt.Sprintf("received %s %d", req.Attr1, i)}
+		if err := ss.Send(&resp); err != nil {
+			return fmt.Errorf("send reponse: %w", err)
+		}
+	}
+
+	return nil
 }

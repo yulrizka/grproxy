@@ -18,7 +18,7 @@ const _ = grpc.SupportPackageIsVersion7
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type SampleClient interface {
 	Simple(ctx context.Context, in *SimpleRequest, opts ...grpc.CallOption) (*SimpleResponse, error)
-	Streaming(ctx context.Context, opts ...grpc.CallOption) (Sample_StreamingClient, error)
+	BidiStream(ctx context.Context, opts ...grpc.CallOption) (Sample_BidiStreamClient, error)
 	ClientStream(ctx context.Context, opts ...grpc.CallOption) (Sample_ClientStreamClient, error)
 	ServerStream(ctx context.Context, in *SimpleRequest, opts ...grpc.CallOption) (Sample_ServerStreamClient, error)
 }
@@ -44,36 +44,36 @@ func (c *sampleClient) Simple(ctx context.Context, in *SimpleRequest, opts ...gr
 	return out, nil
 }
 
-var sampleStreamingStreamDesc = &grpc.StreamDesc{
-	StreamName:    "Streaming",
+var sampleBidiStreamStreamDesc = &grpc.StreamDesc{
+	StreamName:    "BidiStream",
 	ServerStreams: true,
 	ClientStreams: true,
 }
 
-func (c *sampleClient) Streaming(ctx context.Context, opts ...grpc.CallOption) (Sample_StreamingClient, error) {
-	stream, err := c.cc.NewStream(ctx, sampleStreamingStreamDesc, "/Sample/Streaming", opts...)
+func (c *sampleClient) BidiStream(ctx context.Context, opts ...grpc.CallOption) (Sample_BidiStreamClient, error) {
+	stream, err := c.cc.NewStream(ctx, sampleBidiStreamStreamDesc, "/Sample/BidiStream", opts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &sampleStreamingClient{stream}
+	x := &sampleBidiStreamClient{stream}
 	return x, nil
 }
 
-type Sample_StreamingClient interface {
+type Sample_BidiStreamClient interface {
 	Send(*SimpleRequest) error
 	Recv() (*SimpleResponse, error)
 	grpc.ClientStream
 }
 
-type sampleStreamingClient struct {
+type sampleBidiStreamClient struct {
 	grpc.ClientStream
 }
 
-func (x *sampleStreamingClient) Send(m *SimpleRequest) error {
+func (x *sampleBidiStreamClient) Send(m *SimpleRequest) error {
 	return x.ClientStream.SendMsg(m)
 }
 
-func (x *sampleStreamingClient) Recv() (*SimpleResponse, error) {
+func (x *sampleBidiStreamClient) Recv() (*SimpleResponse, error) {
 	m := new(SimpleResponse)
 	if err := x.ClientStream.RecvMsg(m); err != nil {
 		return nil, err
@@ -163,7 +163,7 @@ func (x *sampleServerStreamClient) Recv() (*SimpleResponse, error) {
 // handler for that method returning an Unimplemented error.
 type SampleService struct {
 	Simple       func(context.Context, *SimpleRequest) (*SimpleResponse, error)
-	Streaming    func(Sample_StreamingServer) error
+	BidiStream   func(Sample_BidiStreamServer) error
 	ClientStream func(Sample_ClientStreamServer) error
 	ServerStream func(*SimpleRequest, Sample_ServerStreamServer) error
 }
@@ -185,8 +185,8 @@ func (s *SampleService) simple(_ interface{}, ctx context.Context, dec func(inte
 	}
 	return interceptor(ctx, in, info, handler)
 }
-func (s *SampleService) streaming(_ interface{}, stream grpc.ServerStream) error {
-	return s.Streaming(&sampleStreamingServer{stream})
+func (s *SampleService) bidiStream(_ interface{}, stream grpc.ServerStream) error {
+	return s.BidiStream(&sampleBidiStreamServer{stream})
 }
 func (s *SampleService) clientStream(_ interface{}, stream grpc.ServerStream) error {
 	return s.ClientStream(&sampleClientStreamServer{stream})
@@ -199,21 +199,21 @@ func (s *SampleService) serverStream(_ interface{}, stream grpc.ServerStream) er
 	return s.ServerStream(m, &sampleServerStreamServer{stream})
 }
 
-type Sample_StreamingServer interface {
+type Sample_BidiStreamServer interface {
 	Send(*SimpleResponse) error
 	Recv() (*SimpleRequest, error)
 	grpc.ServerStream
 }
 
-type sampleStreamingServer struct {
+type sampleBidiStreamServer struct {
 	grpc.ServerStream
 }
 
-func (x *sampleStreamingServer) Send(m *SimpleResponse) error {
+func (x *sampleBidiStreamServer) Send(m *SimpleResponse) error {
 	return x.ServerStream.SendMsg(m)
 }
 
-func (x *sampleStreamingServer) Recv() (*SimpleRequest, error) {
+func (x *sampleBidiStreamServer) Recv() (*SimpleRequest, error) {
 	m := new(SimpleRequest)
 	if err := x.ServerStream.RecvMsg(m); err != nil {
 		return nil, err
@@ -264,9 +264,9 @@ func RegisterSampleService(s grpc.ServiceRegistrar, srv *SampleService) {
 			return nil, status.Errorf(codes.Unimplemented, "method Simple not implemented")
 		}
 	}
-	if srvCopy.Streaming == nil {
-		srvCopy.Streaming = func(Sample_StreamingServer) error {
-			return status.Errorf(codes.Unimplemented, "method Streaming not implemented")
+	if srvCopy.BidiStream == nil {
+		srvCopy.BidiStream = func(Sample_BidiStreamServer) error {
+			return status.Errorf(codes.Unimplemented, "method BidiStream not implemented")
 		}
 	}
 	if srvCopy.ClientStream == nil {
@@ -289,8 +289,8 @@ func RegisterSampleService(s grpc.ServiceRegistrar, srv *SampleService) {
 		},
 		Streams: []grpc.StreamDesc{
 			{
-				StreamName:    "Streaming",
-				Handler:       srvCopy.streaming,
+				StreamName:    "BidiStream",
+				Handler:       srvCopy.bidiStream,
 				ServerStreams: true,
 				ClientStreams: true,
 			},

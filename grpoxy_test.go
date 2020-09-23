@@ -61,7 +61,7 @@ func TestCall(t *testing.T) {
 	})
 
 	t.Run("stream", func(t *testing.T) {
-		stream, err := client.Streaming(ctx)
+		stream, err := client.BidiStream(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}

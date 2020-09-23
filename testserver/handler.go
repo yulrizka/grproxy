@@ -13,7 +13,7 @@ func NewHandler() *SampleService {
 	var h sampleHandler
 	return &SampleService{
 		Simple:       h.Simple,
-		Streaming:    h.Streaming,
+		BidiStream:   h.BidiStream,
 		ClientStream: h.ClientStream,
 		ServerStream: h.ServerStream,
 	}
@@ -25,16 +25,16 @@ func (s sampleHandler) Simple(_ context.Context, req *SimpleRequest) (*SimpleRes
 	}, nil
 }
 
-func (s sampleHandler) Streaming(stream Sample_StreamingServer) error {
+func (s sampleHandler) BidiStream(ss Sample_BidiStreamServer) error {
 	for {
-		in, err := stream.Recv()
+		in, err := ss.Recv()
 		if err == io.EOF {
 			return nil
 		}
 		if err != nil {
 			return err
 		}
-		if err = stream.Send(&SimpleResponse{Attr1: "response " + in.Attr1}); err != nil {
+		if err = ss.Send(&SimpleResponse{Attr1: "response " + in.Attr1}); err != nil {
 			return err
 		}
 	}

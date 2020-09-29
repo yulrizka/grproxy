@@ -1,3 +1,4 @@
 /grproxy.iml
 .idea
 cmd/grproxy
+dist

@@ -5,14 +5,17 @@ import (
 	"flag"
 	"log"
 	"net"
+	"os"
 
 	"github.com/yulrizka/grproxy"
 )
 
 func main() {
-	var addr, target string
-	flag.StringVar(&addr, "addr", "127.0.0.1:9999", "proxy address")
-	flag.StringVar(&target, "target", "127.0.0.1:10000", "target grpc server")
+	addr := ":9999"
+	target := "127.0.0.1:10000"
+
+	flag.StringVar(&addr, "addr", env("ADDR", addr), "proxy address")
+	flag.StringVar(&target, "target", env("TARGET", target), "target grpc server")
 	flag.Parse()
 
 	l, err := net.Listen("tcp", addr)
@@ -26,4 +29,12 @@ func main() {
 	if err := interceptor.Serve(context.Background(), l); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func env(s string, def string) string {
+	v := os.Getenv(s)
+	if v == "" {
+		return def
+	}
+	return v
 }

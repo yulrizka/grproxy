@@ -38,3 +38,12 @@ $ grpcurl -plaintext localhost:9999 list
 Fooservice
 grpc.reflection.v1alpha.ServerReflection
 ```
+
+## Running with docker
+
+```
+$ docker run --rm -it -p 9999:9999 yulrizka/grproxy:latest -target "host.docker.internal:10000"
+```
+
+`host.docker.internal` will be translated by docker to the host IP address. This is workaround as OSX or windows does not
+support `-net=host`

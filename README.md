@@ -17,15 +17,15 @@ Arguments
 $ docker run --rm -it -p 9999:9999 yulrizka/grproxy:latest -target "host.docker.internal:10000"
 ```
 
-`host.docker.internal` will be translated by docker to the host IP address. This is if you
+`host.docker.internal` will be translated by docker to the host IP address as a workaround
+since OSX or Windows does not support `--net=host`. This is if you
 bind remote GRPC server to your local machine (localhost). See example below.
-
 
 ## Example
 
-Say that you are running a GRPC service **FooService** on kubernetes port **10000**.
+Say that you are running a GRPC service **FooService** on remote kubernetes port **10000**.
 
-To debug it, you want to port forward the remote service locally
+To debug it, first you need to forward the service port to localhost
 
 ```
 $ kubectl port-forward svc/strawberry-core 10000:10000

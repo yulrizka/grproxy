@@ -1,9 +1,21 @@
 # grproxy
 GRPC proxy to inspect, record, and reply requests
 
+When you are debugging an issue, some time you want to know what is the GRPC client (eg: frontend application)
+is sending and what the server (eg: backend application) sent back to the client. Normally This would 
+involve putting log or print statemtent in both side. With _grproxy_ you can inspect the wire to see what 
+actualy being sent and received without changing the applications.
+
 **Current limitations**
 * Only support support inspecting request and response
+* Stream request/response is not logged
 * Server needs to implement [reflection API](https://github.com/grpc/grpc/blob/master/doc/server-reflection.md)
+
+**Planned for the future**
+* Support recording the request to a file which can be used later on to simulate the
+request in different machine (eg: local dev laptop) multiple times.
+* Filter on specific methods
+* Reading the schema from a proto files definition
 
 ## Running
 ```

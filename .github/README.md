@@ -67,4 +67,20 @@ $ grpcurl -plaintext localhost:9999 list
 
 Fooservice
 grpc.reflection.v1alpha.ServerReflection
+
+
+# example calling a method (on a separate terminal)
+$ echo '{"id":1}' | grpcurl -d @ -plaintext localhost:9999 Fooservice.GetUser
+
+# output of the proxy
+Fooservice.GetUser
+{
+  "id": "1"
+}
+
+response:
+{
+    "id": "1",
+    "Name": "Jhon Doe"
+}
 ```

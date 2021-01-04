@@ -3,7 +3,6 @@ import {List, ListItem, ListItemProps, ListItemText} from "@material-ui/core";
 import {Call} from "./Call";
 
 function ListItemLink(props: ListItemProps<'a', { button?: true }>) {
-
     return <ListItem button divider component="a" {...props}/>;
 }
 

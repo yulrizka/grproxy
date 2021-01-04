@@ -19,6 +19,8 @@ export const App: FC = () => {
 
     useEffect(() => {
         // component mount
+
+        // simulate visualizing a request and response every X second
         let i = 1;
         setInterval(()=>{
             if (i < 50) {

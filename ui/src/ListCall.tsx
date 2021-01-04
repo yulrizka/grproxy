@@ -19,7 +19,7 @@ export const ListCall:FC<ListCallProps> = ({calls, currentCall, setCurrentCall})
 
     return (
         <List component="nav" aria-label="secondary mailbox folders">
-            {calls.map((v) => {
+            {calls.map((call) => {
                 return (
                     <ListItemLink key={v.id} onClick={() => handleClick(v)} selected={currentCall.id === v.id}>
                         <ListItemText primary={`Foo.bar.GetUser ${v.id}`}/>
